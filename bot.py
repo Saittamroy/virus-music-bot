@@ -1,6 +1,7 @@
 import os
 import asyncio
 import aiohttp
+import json
 from highrise import BaseBot
 from highrise.models import SessionMetadata, User, Position
 import time
@@ -34,7 +35,6 @@ class MusicBot(BaseBot):
     async def on_user_join(self, user: User, position: Position) -> None:
         """Welcome new users"""
         await self.highrise.chat(f"👋 Welcome {user.username}! Type !help for music commands")
-        await self.highrise.send_whisper(user.id, "🎵 Use !play [song] to play music, !url to get stream URL for room")
 
     async def on_chat(self, user: User, message: str) -> None:
         try:
@@ -82,24 +82,28 @@ class MusicBot(BaseBot):
                     if resp.status == 200:
                         data = await resp.json()
                         if data.get('results'):
+                            # Get the first result
                             first_result = data['results'][0]
                             
-                            # Start streaming
+                            # Send the track data to play endpoint
+                            track_data = json.dumps(first_result)
+                            
                             async with session.post(
                                 f"{self.api_base}/api/play",
-                                data={'video_url': first_result['url']}
+                                data={'track_data': track_data}
                             ) as play_resp:
                                 if play_resp.status == 200:
                                     result = await play_resp.json()
                                     
                                     await self.highrise.chat(
                                         f"🎵 NOW PLAYING: {first_result['title']}\n"
-                                        f"🎤 Artist: {first_result.get('uploader', 'Unknown')}\n"
-                                        f"🎧 Requested by: @{user.username}\n"
-                                        f"🔗 Use !url to get stream URL for room"
+                                        f"🎤 Artist: {first_result.get('artist', 'Unknown')}\n"
+                                        f"🎧 Requested by: @{user.username}"
                                     )
                                 else:
-                                    await self.highrise.chat("❌ Failed to start stream")
+                                    error_text = await play_resp.text()
+                                    print(f"Play API error: {error_text}")
+                                    await self.highrise.chat("❌ Failed to start music stream")
                         else:
                             await self.highrise.chat("❌ No results found for your search")
                     else:
@@ -129,10 +133,7 @@ class MusicBot(BaseBot):
                     if radio_url:
                         await self.highrise.send_whisper(
                             user.id,
-                            f"📻 RADIO STREAM URL:\n"
-                            f"{radio_url}\n\n"
-                            f"📍 Add this to Highrise room music settings!\n"
-                            f"🎵 Music will automatically play when you use !play"
+                            f"📻 RADIO STREAM URL:\n{radio_url}\n\n📍 Add this to Highrise room music settings!"
                         )
                         await self.highrise.chat(f"📻 @{user.username} check your DMs for the stream URL!")
                     else:
@@ -154,10 +155,7 @@ class MusicBot(BaseBot):
                     
                     if status == "playing" and current_track:
                         await self.highrise.chat(
-                            f"🎧 NOW PLAYING:\n"
-                            f"📀 {current_track['title']}\n"
-                            f"🎤 {current_track['artist']}\n"
-                            f"🎵 Request !play [song] for more music"
+                            f"🎧 NOW PLAYING: {current_track['title']} - {current_track['artist']}"
                         )
                     else:
                         await self.highrise.chat("📻 No music currently playing")
@@ -175,8 +173,7 @@ class MusicBot(BaseBot):
                     
                     status_emoji = "🟢" if stream_active else "🔴"
                     await self.highrise.chat(
-                        f"{status_emoji} Music Status: {status.upper()}\n"
-                        f"📡 Stream: {'ACTIVE' if stream_active else 'INACTIVE'}"
+                        f"{status_emoji} Music Status: {status.upper()}"
                     )
                 else:
                     await self.highrise.chat("❌ Service unavailable")
@@ -185,13 +182,12 @@ class MusicBot(BaseBot):
         """Handle !help command"""
         help_text = (
             "🎵 MUSIC BOT COMMANDS:\n"
-            "!play [song] - Play music from YouTube\n"
+            "!play [song] - Play music from free music APIs\n"
             "!stop - Stop current playback\n"
             "!url - Get radio stream URL for room\n"
             "!np - Now playing information\n"
             "!status - Stream status\n"
-            "!help - This help message\n\n"
-            "💡 TIP: Add the stream URL to room music settings once, then control with !play"
+            "!help - This help message"
         )
         
         await self.highrise.send_whisper(user.id, help_text)
@@ -208,23 +204,19 @@ class MusicBot(BaseBot):
                 print(f"Roaming error: {e}")
                 await asyncio.sleep(10)
 
-if __name__ == "__main__":
-    from highrise import __main__
-    from highrise.__main__ import BotDefinition
-
-    API_TOKEN = os.environ.get("HIGHRISE_API_TOKEN")
-    ROOM_ID = os.environ.get("HIGHRISE_ROOM_ID")
-
-    if not API_TOKEN or not ROOM_ID:
+# Bot runner
+async def main():
+    # Get environment variables
+    api_token = os.getenv("HIGHRISE_API_TOKEN")
+    room_id = os.getenv("HIGHRISE_ROOM_ID")
+    
+    if not api_token or not room_id:
         print("❌ Set HIGHRISE_API_TOKEN and HIGHRISE_ROOM_ID environment variables")
-        exit(1)
-
+        return
+    
+    # Create and run bot
     bot = MusicBot()
-    bot_definition = BotDefinition(bot, ROOM_ID, API_TOKEN)
+    await bot.run(api_token, room_id)
 
-    try:
-        asyncio.run(__main__.main([bot_definition]))
-    except KeyboardInterrupt:
-        print("\n🛑 Music Bot stopped by user")
-    except Exception as e:
-        print(f"💥 Music Bot crashed: {e}")
+if __name__ == "__main__":
+    asyncio.run(main())
