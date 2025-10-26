@@ -1,6 +1,10 @@
-virus-music-bot/
-├── bot.py
-├── requirements.txt
-├── railway.json
-├── README.md
-└── .gitignore
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS"
+  },
+  "deploy": {
+    "startCommand": "python -m highrise bot.py:bot --room-id $ROOM_ID --api-token $BOT_TOKEN",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}
