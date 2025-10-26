@@ -1,2 +1,2 @@
-highrise-bot-sdk==24.1.0
-aiohttp==3.9.1
+highrise-bot-sdk
+aiohttp
