@@ -1,6 +1,2 @@
-virus-music-bot/
-├── bot.py
-├── requirements.txt
-├── railway.json
-├── README.md
-└── .gitignore
+highrise-bot-sdk==24.1.0
+aiohttp==3.9.1
