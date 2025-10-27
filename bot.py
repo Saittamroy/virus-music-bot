@@ -69,7 +69,7 @@ class AzuraCastBot(BaseBot):
             await self.highrise.send_whisper(user.id, "❌ Unknown command. Use !help")
 
     async def cmd_play(self, user: User, args: str) -> None:
-        """Handle !play [song] - Add song to queue"""
+        """Handle !play [song] - Add song to queue or play immediately"""
         if not args:
             await self.highrise.send_whisper(user.id, "Usage: !play [song name]\nExample: !play despacito")
             return
@@ -86,7 +86,7 @@ class AzuraCastBot(BaseBot):
                             # Get the first result
                             first_result = data['results'][0]
                             
-                            # Add to queue with user info
+                            # Play or add to queue with user info
                             async with session.post(
                                 f"{self.api_base}/api/play",
                                 data={'video_url': first_result['url'], 'requested_by': user.username}
@@ -100,7 +100,7 @@ class AzuraCastBot(BaseBot):
                                         await self.highrise.chat(
                                             f"🎵 ADDED TO QUEUE (#{position}): {first_result['title']}\n"
                                             f"🎤 Requested by: @{user.username}\n"
-                                            f"⏳ Will play after current songs..."
+                                            f"⏳ Will play after current song..."
                                         )
                                     else:
                                         # Song is playing now
@@ -112,7 +112,7 @@ class AzuraCastBot(BaseBot):
                                 else:
                                     error_text = await play_resp.text()
                                     print(f"Play API error: {error_text}")
-                                    await self.highrise.chat("❌ Failed to add song to queue")
+                                    await self.highrise.chat("❌ Failed to play song")
                         else:
                             await self.highrise.chat("❌ No results found for your search")
                     else:
@@ -222,7 +222,7 @@ class AzuraCastBot(BaseBot):
                     radio_url = data.get('radio_url')
                     
                     if radio_url:
-                        message = f"📻 LIVE RADIO STREAM URL:\n{radio_url}\n\n📍 Add this to Highrise room music settings!\n\n🎧 Features:\n• 24/7 Live Stream\n• Everyone hears same timeline\n• Request songs with !play\n• Skip with !skip\n• Auto Bollywood when queue empty"
+                        message = f"📻 LIVE RADIO STREAM URL:\n{radio_url}\n\n📍 Add this to Highrise room music settings!\n\n🎧 Features:\n• 24/7 Live Stream\n• Everyone hears same timeline\n• Request songs with !play\n• Skip with !skip\n• Auto-resume if paused\n• Auto Bollywood when queue empty"
                         
                         await self.highrise.send_whisper(user.id, message)
                         await self.highrise.chat(f"📻 @{user.username} check your DMs for the radio URL!")
@@ -294,9 +294,9 @@ class AzuraCastBot(BaseBot):
         help_text = (
             "📻 24/7 LIVE RADIO COMMANDS:\n\n"
             "🎵 Music Requests:\n"
-            "!play [song] - Request song (adds to queue)\n"
+            "!play [song] - Request song (plays immediately if random playing)\n"
             "!search [song] - Search without playing\n"
-            "!skip - Vote to skip current song\n\n"
+            "!skip - Skip current song\n\n"
             "📋 Queue Info:\n"
             "!queue - Show current queue\n"
             "!np - Now playing information\n\n"
@@ -306,10 +306,9 @@ class AzuraCastBot(BaseBot):
             "!help - This help message\n\n"
             "💡 Features:\n"
             "• Music NEVER stops - 24/7 stream\n"
-            "• Everyone hears the same timeline\n"
-            "• Auto Bollywood when queue empty\n"
-            "• Request songs with !play\n"
-            "• Skip with !skip (no pause/stop)"
+            "• First request plays immediately\n"
+            "• Auto-resume if stream paused\n"
+            "• Auto Bollywood when queue empty"
         )
         
         await self.highrise.send_whisper(user.id, help_text)
