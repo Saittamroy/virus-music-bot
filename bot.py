@@ -28,7 +28,7 @@ class AzuraCastBot(BaseBot):
         self.bot_user_id = session_metadata.user_id
         print("📻 AzuraCast Radio Bot Started!")
         
-        await self.highrise.chat("🎧 Radio Bot Online! Type !help for commands")
+        await self.highrise.chat("🎧 24/7 Radio Bot Online! Music never stops! Type !help for commands")
         asyncio.create_task(self.roam_continuously())
 
     async def on_user_join(self, user: User, position: Position) -> None:
@@ -54,7 +54,6 @@ class AzuraCastBot(BaseBot):
 
         commands = {
             'play': self.cmd_play,
-            'stop': self.cmd_stop,
             'url': self.cmd_url,
             'np': self.cmd_now_playing,
             'help': self.cmd_help,
@@ -70,7 +69,7 @@ class AzuraCastBot(BaseBot):
             await self.highrise.send_whisper(user.id, "❌ Unknown command. Use !help")
 
     async def cmd_play(self, user: User, args: str) -> None:
-        """Handle !play [song] - Play music on radio"""
+        """Handle !play [song] - Add song to queue"""
         if not args:
             await self.highrise.send_whisper(user.id, "Usage: !play [song name]\nExample: !play despacito")
             return
@@ -87,14 +86,13 @@ class AzuraCastBot(BaseBot):
                             # Get the first result
                             first_result = data['results'][0]
                             
-                            # Start radio stream with user info
+                            # Add to queue with user info
                             async with session.post(
                                 f"{self.api_base}/api/play",
                                 data={'video_url': first_result['url'], 'requested_by': user.username}
                             ) as play_resp:
                                 if play_resp.status == 200:
                                     result = await play_resp.json()
-                                    radio_url = result.get('stream_url')
                                     
                                     if result.get('status') == 'queued':
                                         # Song was added to queue
@@ -102,29 +100,19 @@ class AzuraCastBot(BaseBot):
                                         await self.highrise.chat(
                                             f"🎵 ADDED TO QUEUE (#{position}): {first_result['title']}\n"
                                             f"🎤 Requested by: @{user.username}\n"
-                                            f"⏳ Currently playing other song..."
+                                            f"⏳ Will play after current songs..."
                                         )
                                     else:
                                         # Song is playing now
                                         await self.highrise.chat(
                                             f"🎵 NOW PLAYING: {first_result['title']}\n"
                                             f"🎤 Artist: {first_result.get('artist', 'Unknown')}\n"
-                                            f"🎧 Requested by: @{user.username}\n"
-                                            f"📻 Radio stream started!"
+                                            f"🎧 Requested by: @{user.username}"
                                         )
-                                        
-                                        # Send radio URL via whisper
-                                        if radio_url:
-                                            await self.highrise.send_whisper(
-                                                user.id,
-                                                f"📻 RADIO STREAM URL:\n{radio_url}\n\n"
-                                                f"📍 Add this to Highrise room music settings!\n"
-                                                f"🎵 Music will play automatically!"
-                                            )
                                 else:
                                     error_text = await play_resp.text()
                                     print(f"Play API error: {error_text}")
-                                    await self.highrise.chat("❌ Failed to start radio stream")
+                                    await self.highrise.chat("❌ Failed to add song to queue")
                         else:
                             await self.highrise.chat("❌ No results found for your search")
                     else:
@@ -166,15 +154,6 @@ class AzuraCastBot(BaseBot):
                 print(f"Search error: {e}")
                 await self.highrise.send_whisper(user.id, "❌ Cannot connect to search service")
 
-    async def cmd_stop(self, user: User, args: str) -> None:
-        """Handle !stop - Stop radio stream"""
-        async with aiohttp.ClientSession() as session:
-            async with session.post(f"{self.api_base}/api/stop") as resp:
-                if resp.status == 200:
-                    await self.highrise.chat(f"⏹️ Radio stopped by @{user.username}")
-                else:
-                    await self.highrise.chat("❌ Radio already stopped or service unavailable")
-
     async def cmd_skip(self, user: User, args: str) -> None:
         """Handle !skip - Skip current song"""
         async with aiohttp.ClientSession() as session:
@@ -183,12 +162,14 @@ class AzuraCastBot(BaseBot):
                     result = await resp.json()
                     message = result.get('message', 'Skipped')
                     
-                    if "no more songs" in message.lower():
-                        await self.highrise.chat(f"⏭️ @{user.username} skipped - {message}")
+                    if "queue" in message.lower():
+                        await self.highrise.chat(f"⏭️ @{user.username} skipped to next song in queue")
+                    elif "random" in message.lower():
+                        await self.highrise.chat(f"⏭️ @{user.username} skipped to next random song")
                     else:
-                        await self.highrise.chat(f"⏭️ @{user.username} skipped to next song")
+                        await self.highrise.chat(f"⏭️ @{user.username} skipped current song")
                 else:
-                    await self.highrise.chat("❌ No song currently playing")
+                    await self.highrise.chat("❌ Skip failed")
 
     async def cmd_queue(self, user: User, args: str) -> None:
         """Handle !queue - Show current queue"""
@@ -211,7 +192,7 @@ class AzuraCastBot(BaseBot):
                                 requester = current_track.get('requested_by', 'Unknown')
                                 queue_text += f"🎵 NOW PLAYING: {current_track.get('title', 'Unknown')} (by @{requester})\n"
                         else:
-                            queue_text += "🎵 NOW PLAYING: Nothing\n"
+                            queue_text += "🎵 NOW PLAYING: Auto DJ - Bollywood Mix\n"
                         
                         if queue_length > 0:
                             queue_text += f"\n📜 Next in queue ({queue_length} songs):\n"
@@ -222,7 +203,7 @@ class AzuraCastBot(BaseBot):
                             if queue_length > 5:
                                 queue_text += f"... and {queue_length - 5} more\n"
                         else:
-                            queue_text += "\n📜 Queue is empty - random Bollywood songs will play automatically"
+                            queue_text += "\n📜 Queue is empty - random Bollywood songs playing"
                         
                         await self.highrise.send_whisper(user.id, queue_text)
                     else:
@@ -239,17 +220,9 @@ class AzuraCastBot(BaseBot):
                 if resp.status == 200:
                     data = await resp.json()
                     radio_url = data.get('radio_url')
-                    status = data.get('status')
                     
                     if radio_url:
-                        message = f"📻 RADIO STREAM URL:\n{radio_url}\n\n📍 Add this to Highrise room music settings!"
-                        
-                        if status == "playing":
-                            current_track = data.get('current_track', 'Unknown')
-                            artist = data.get('artist', 'Unknown')
-                            message += f"\n🎵 Currently playing: {current_track} by {artist}"
-                        else:
-                            message += f"\n💡 Use !play [song] to start music"
+                        message = f"📻 LIVE RADIO STREAM URL:\n{radio_url}\n\n📍 Add this to Highrise room music settings!\n\n🎧 Features:\n• 24/7 Live Stream\n• Everyone hears same timeline\n• Request songs with !play\n• Skip with !skip\n• Auto Bollywood when queue empty"
                         
                         await self.highrise.send_whisper(user.id, message)
                         await self.highrise.chat(f"📻 @{user.username} check your DMs for the radio URL!")
@@ -265,19 +238,28 @@ class AzuraCastBot(BaseBot):
                 if resp.status == 200:
                     data = await resp.json()
                     current_track = data.get('current_track')
-                    status = data.get('status')
+                    is_random = data.get('is_random_playing', False)
+                    queue_length = data.get('queue_length', 0)
                     
-                    if status == "playing" and current_track:
+                    if current_track:
                         requester = current_track.get('requested_by', 'Auto DJ')
-                        await self.highrise.chat(
-                            f"🎧 NOW PLAYING:\n"
-                            f"📀 {current_track['title']}\n"
-                            f"🎤 {current_track['artist']}\n"
-                            f"👤 Requested by: @{requester}\n"
-                            f"⏱️ {self.format_duration(current_track.get('duration', 0))}"
-                        )
+                        if is_random:
+                            await self.highrise.chat(
+                                f"🎲 AUTO DJ PLAYING:\n"
+                                f"📀 {current_track['title']}\n"
+                                f"🎤 {current_track['artist']}\n"
+                                f"📜 {queue_length} songs in queue"
+                            )
+                        else:
+                            await self.highrise.chat(
+                                f"🎧 NOW PLAYING:\n"
+                                f"📀 {current_track['title']}\n"
+                                f"🎤 {current_track['artist']}\n"
+                                f"👤 Requested by: @{requester}\n"
+                                f"📜 {queue_length} songs in queue"
+                            )
                     else:
-                        await self.highrise.chat("📻 No music currently playing")
+                        await self.highrise.chat("🎲 Auto DJ Playing: Bollywood Club Mix")
                 else:
                     await self.highrise.chat("❌ Could not get player status")
 
@@ -287,44 +269,51 @@ class AzuraCastBot(BaseBot):
             async with session.get(f"{self.api_base}/api/status") as resp:
                 if resp.status == 200:
                     data = await resp.json()
-                    status = data.get('status', 'unknown')
-                    stream_active = data.get('stream_active', False)
                     current_track = data.get('current_track')
+                    queue_length = data.get('queue_length', 0)
+                    is_random = data.get('is_random_playing', False)
                     
-                    status_emoji = "🟢" if stream_active else "🔴"
-                    status_text = f"{status_emoji} Radio Status: {status.upper()}\n📡 Stream: {'ACTIVE' if stream_active else 'INACTIVE'}"
+                    status_text = "🟢 LIVE RADIO STATUS:\n📡 Stream: ALWAYS ACTIVE\n"
+                    status_text += f"📜 Queue: {queue_length} songs\n"
                     
                     if current_track:
-                        requester = current_track.get('requested_by', 'Auto DJ')
-                        status_text += f"\n🎵 Now Playing: {current_track['title']} (by @{requester})"
+                        if is_random:
+                            status_text += f"🎲 Now Playing: {current_track['title']} (Auto DJ)"
+                        else:
+                            requester = current_track.get('requested_by', 'Unknown')
+                            status_text += f"🎵 Now Playing: {current_track['title']} (by @{requester})"
+                    else:
+                        status_text += "🎲 Now Playing: Auto DJ - Bollywood Mix"
                     
                     await self.highrise.chat(status_text)
                 else:
-                    await self.highrise.chat("❌ Service unavailable")
+                    await self.highrise.chat("❌ Could not get radio status")
 
     async def cmd_help(self, user: User, args: str) -> None:
         """Handle !help - Show help menu"""
         help_text = (
-            "📻 RADIO BOT COMMANDS:\n\n"
-            "🎵 Music Control:\n"
-            "!play [song] - Play music or add to queue\n"
-            "!stop - Stop current playback\n"
-            "!skip - Skip current song\n"
-            "!search [song] - Search without playing\n\n"
-            "📋 Queue Commands:\n"
-            "!queue - Show current queue\n\n"
+            "📻 24/7 LIVE RADIO COMMANDS:\n\n"
+            "🎵 Music Requests:\n"
+            "!play [song] - Request song (adds to queue)\n"
+            "!search [song] - Search without playing\n"
+            "!skip - Vote to skip current song\n\n"
+            "📋 Queue Info:\n"
+            "!queue - Show current queue\n"
+            "!np - Now playing information\n\n"
             "📡 Radio Info:\n"
-            "!url - Get radio stream URL for room\n"
-            "!np - Now playing information\n"
-            "!status - Radio stream status\n"
+            "!url - Get radio stream URL\n"
+            "!status - Radio status\n"
             "!help - This help message\n\n"
-            "💡 Auto Features:\n"
-            "• Random Bollywood songs play 24/7\n"
-            "• Queue system for song requests\n"
-            "• Auto-play when queue is empty"
+            "💡 Features:\n"
+            "• Music NEVER stops - 24/7 stream\n"
+            "• Everyone hears the same timeline\n"
+            "• Auto Bollywood when queue empty\n"
+            "• Request songs with !play\n"
+            "• Skip with !skip (no pause/stop)"
         )
         
         await self.highrise.send_whisper(user.id, help_text)
+        await self.highrise.chat(f"📖 @{user.username} Check your DMs for help!")
 
     def format_duration(self, seconds: int) -> str:
         """Format seconds into MM:SS"""
