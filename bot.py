@@ -1,9 +1,9 @@
 import os
 import asyncio
 import aiohttp
-import json
 from highrise import BaseBot
 from highrise.models import SessionMetadata, User, Position
+from highrise.__main__ import *
 
 class AzuraCastBot(BaseBot):
     def __init__(self):
@@ -273,19 +273,25 @@ class AzuraCastBot(BaseBot):
                 print(f"Roaming error: {e}")
                 await asyncio.sleep(10)
 
-# Bot runner
-async def main():
+# FIXED BOT RUNNER - Use the new Highrise SDK method
+if __name__ == "__main__":
+    import sys
+    
     # Get environment variables
     api_token = os.getenv("HIGHRISE_API_TOKEN")
     room_id = os.getenv("HIGHRISE_ROOM_ID")
     
     if not api_token or not room_id:
-        print("❌ Set HIGHRISE_API_TOKEN and HIGHRISE_ROOM_ID environment variables")
-        return
+        print("❌ Error: Set HIGHRISE_API_TOKEN and HIGHRISE_ROOM_ID environment variables")
+        sys.exit(1)
     
-    # Create and run bot
+    # Create bot definition using the new SDK format
     bot = AzuraCastBot()
-    await bot.run(api_token, room_id)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    
+    try:
+        # Run the bot using the new SDK method
+        asyncio.run(main([BotDefinition(bot, room_id, api_token)]))
+    except KeyboardInterrupt:
+        print("\n🛑 Bot stopped by user")
+    except Exception as e:
+        print(f"💥 Bot crashed: {e}")
