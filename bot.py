@@ -80,7 +80,7 @@ class AzuraCastMusicBot(BaseBot):
         
         print("=" * 50)
         print("🎵 MUSIC BOT INITIALIZED")
-        print(f"📍 Room ID: {session_metadata.room_info.room_id}")
+        print(f"📍 Room: {session_metadata.room_info.room_name if hasattr(session_metadata.room_info, 'room_name') else 'Unknown'}")
         print(f"🤖 Bot User ID: {self.bot_user_id}")
         print(f"🌐 API Base: {self.api_base}")
         print("=" * 50)
@@ -104,9 +104,13 @@ class AzuraCastMusicBot(BaseBot):
         # Cancel roaming task
         if self.roaming_task:
             self.roaming_task.cancel()
+            try:
+                await self.roaming_task
+            except asyncio.CancelledError:
+                pass
         
         # Close HTTP session
-        if self.session:
+        if self.session and not self.session.closed:
             await self.session.close()
         
         print("🛑 Bot stopped gracefully")
@@ -493,6 +497,10 @@ class AzuraCastMusicBot(BaseBot):
     
     async def api_search(self, query: str, limit: int = 10) -> List[Dict]:
         """Search for music via API"""
+        if not self.session or self.session.closed:
+            print("❌ HTTP session not available")
+            return []
+        
         try:
             async with self.session.get(
                 f"{self.api_base}/api/search",
@@ -501,13 +509,22 @@ class AzuraCastMusicBot(BaseBot):
                 if resp.status == 200:
                     data = await resp.json()
                     return data.get('results', [])
+                else:
+                    print(f"❌ Search API returned status {resp.status}")
                 return []
+        except asyncio.TimeoutError:
+            print(f"❌ API search timeout for query: {query}")
+            return []
         except Exception as e:
             print(f"❌ API search error: {e}")
             return []
 
     async def api_play(self, video_url: str) -> Optional[Dict]:
         """Play a song via API"""
+        if not self.session or self.session.closed:
+            print("❌ HTTP session not available")
+            return None
+        
         try:
             async with self.session.post(
                 f"{self.api_base}/api/play",
@@ -515,39 +532,66 @@ class AzuraCastMusicBot(BaseBot):
             ) as resp:
                 if resp.status == 200:
                     return await resp.json()
+                else:
+                    print(f"❌ Play API returned status {resp.status}")
                 return None
+        except asyncio.TimeoutError:
+            print(f"❌ API play timeout")
+            return None
         except Exception as e:
             print(f"❌ API play error: {e}")
             return None
 
     async def api_stop(self) -> bool:
         """Stop playback via API"""
+        if not self.session or self.session.closed:
+            print("❌ HTTP session not available")
+            return False
+        
         try:
             async with self.session.post(f"{self.api_base}/api/stop") as resp:
                 return resp.status == 200
+        except asyncio.TimeoutError:
+            print(f"❌ API stop timeout")
+            return False
         except Exception as e:
             print(f"❌ API stop error: {e}")
             return False
 
     async def api_status(self) -> Optional[Dict]:
         """Get player status via API"""
+        if not self.session or self.session.closed:
+            print("❌ HTTP session not available")
+            return None
+        
         try:
             async with self.session.get(f"{self.api_base}/api/status") as resp:
                 if resp.status == 200:
                     return await resp.json()
                 return None
+        except asyncio.TimeoutError:
+            print(f"❌ API status timeout")
+            return None
         except Exception as e:
             print(f"❌ API status error: {e}")
             return None
 
     async def fetch_radio_url(self) -> None:
         """Fetch and cache radio URL"""
+        if not self.session or self.session.closed:
+            print("❌ HTTP session not available for fetching radio URL")
+            return
+        
         try:
             async with self.session.get(f"{self.api_base}/api/radio/url") as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     self.radio_url = data.get('radio_url')
                     print(f"✅ Radio URL cached: {self.radio_url}")
+                else:
+                    print(f"❌ Failed to fetch radio URL: status {resp.status}")
+        except asyncio.TimeoutError:
+            print(f"❌ Radio URL fetch timeout")
         except Exception as e:
             print(f"❌ Failed to fetch radio URL: {e}")
 
