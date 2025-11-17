@@ -1,268 +1,296 @@
-from highrise import BaseBot, User, Position
-from highrise.models import SessionMetadata
+import os
 import asyncio
 import aiohttp
-import os
-from typing import Dict, List, Optional
-from datetime import datetime
+from highrise import BaseBot
+from highrise.models import SessionMetadata, User, Position
+from highrise.__main__ import *
 
-class MusicBot(BaseBot):
+class AzuraCastBot(BaseBot):
     def __init__(self):
         super().__init__()
-        self.backend_url = os.getenv('MUSIC_API_URL', 'http://localhost:5000')
-        self.admins: List[str] = []
-        self.session: Optional[aiohttp.ClientSession] = None
+        self.api_base = os.getenv('MUSIC_API_URL')
+        if not self.api_base:
+            raise ValueError("MUSIC_API_URL environment variable is required")
+        
+        self.bot_user_id = None
+        
+        # Bot roaming positions
+        self.roaming_positions = [
+            Position(13.5, 0.25, 14.0, "FrontRight"),
+            Position(15.5, 0.25, 19.5, "FrontLeft"),
+            Position(6.5, 0.25, 17.0, "BackRight"),
+            Position(11.0, 0.25, 23.5, "BackLeft"),
+            Position(3.0, 0.25, 15.5, "FrontRight"),
+        ]
+        self.current_roam_index = 0
 
     async def on_start(self, session_metadata: SessionMetadata) -> None:
-        print("🎵 Music Bot is now online!")
-        self.session = aiohttp.ClientSession()
-        await asyncio.sleep(2)
-        await self.send_welcome()
-
-    async def send_welcome(self):
-        welcome = """
-╔════════════════════════════╗
-║  🎵 LIVE MUSIC RADIO ROOM 🎵  ║
-╚════════════════════════════╝
-
-🎶 LISTEN TO LIVE MUSIC 24/7!
-📻 Everyone hears the same song
-🎧 Join anytime - never miss a beat
-⭐ Type /help to get started
-
-Welcome to the radio!
-        """
-        await self.highrise.chat(welcome)
+        self.bot_user_id = session_metadata.user_id
+        print("📻 AzuraCast Radio Bot Started!")
+        
+        await self.highrise.chat("🎧 Radio Bot Online! Type !help for commands")
+        asyncio.create_task(self.roam_continuously())
 
     async def on_user_join(self, user: User, position: Position) -> None:
-        await asyncio.sleep(1)
-        await self.highrise.chat(f"🎵 Welcome {user.username} to the music room!")
-
-        try:
-            async with self.session.get(f"{self.backend_url}/api/nowplaying") as response:
-                if response.status == 200:
-                    data = await response.json()
-                    if data.get('playing'):
-                        track = data['track']
-                        await self.highrise.chat(f"🎵 Now Playing: {track['title']}")
-                        await self.highrise.chat(f"🎧 Listen at: {self.backend_url}/api/stream")
-        except:
-            pass
+        """Welcome new users"""
+        await self.highrise.chat(f"👋 Welcome {user.username}! Type !help for radio commands")
 
     async def on_chat(self, user: User, message: str) -> None:
-        msg = message.lower().strip()
-
-        if msg == "/help" or msg == "/commands":
-            await self.show_help()
-
-        elif msg == "/nowplaying" or msg == "/np":
-            await self.show_now_playing()
-
-        elif msg == "/queue":
-            await self.show_queue()
-
-        elif msg == "/stream" or msg == "/listen":
-            await self.show_stream_url()
-
-        elif msg.startswith("/request "):
-            query = message[9:].strip()
-            await self.request_song(user, query)
-
-        elif msg == "/skip" and self.is_admin(user):
-            await self.skip_song()
-
-        elif msg == "/pause" and self.is_admin(user):
-            await self.pause_playback()
-
-        elif (msg == "/resume" or msg == "/next") and self.is_admin(user):
-            await self.resume_playback()
-
-    def is_admin(self, user: User) -> bool:
-        return user.username in self.admins
-
-    async def show_help(self):
-        help_text = """
-🎵 MUSIC BOT COMMANDS 🎵
-
-🎧 LISTENING:
-/nowplaying or /np - Current song
-/queue - Upcoming songs
-/stream - Get stream URL to listen
-
-🎶 REQUESTS:
-/request <song name or URL>
-  - Request a YouTube song
-  - Examples:
-    /request Despacito
-    /request https://youtube.com/watch?v=...
-
-🎛️ ADMIN CONTROLS:
-/skip - Skip to next song
-/pause - Pause broadcast
-/resume or /next - Resume playback
-
-Stream URL: {backend}/api/stream
-        """.format(backend=self.backend_url)
-        await self.highrise.chat(help_text)
-
-    async def show_now_playing(self):
         try:
-            async with self.session.get(f"{self.backend_url}/api/nowplaying") as response:
-                if response.status == 200:
-                    data = await response.json()
+            message = message.strip()
 
-                    if data.get('playing'):
-                        track = data['track']
-                        paused = data.get('paused', False)
-                        listeners = data.get('listeners', 0)
-                        queue_size = data.get('queue_size', 0)
+            if message.startswith('!'):
+                await self.handle_command(user, message)
 
-                        status = "⏸️ PAUSED" if paused else "▶️ NOW PLAYING"
+        except Exception as e:
+            print(f"Error: {e}")
+            await self.highrise.send_whisper(user.id, "❌ Error processing command")
 
-                        now_playing_text = f"""
-{status}
+    async def handle_command(self, user: User, message: str) -> None:
+        """Handle all commands"""
+        command_parts = message[1:].split(' ', 1)
+        command = command_parts[0].lower()
+        args = command_parts[1] if len(command_parts) > 1 else ""
 
-🎵 {track['title']}
-👤 {track['artist']}
-👂 {listeners} listeners
-📋 {queue_size} songs in queue
+        commands = {
+            'play': self.cmd_play,
+            'stop': self.cmd_stop,
+            'url': self.cmd_url,
+            'np': self.cmd_now_playing,
+            'help': self.cmd_help,
+            'status': self.cmd_status,
+            'search': self.cmd_search,
+            'skip': self.cmd_skip,
+        }
 
-🎧 Stream: {self.backend_url}/api/stream
-                        """
-                        await self.highrise.chat(now_playing_text)
+        if command in commands:
+            await commands[command](user, args)
+        else:
+            await self.highrise.send_whisper(user.id, "❌ Unknown command. Use !help")
+
+    async def cmd_play(self, user: User, args: str) -> None:
+        """Handle !play [song] - Play music on radio"""
+        if not args:
+            await self.highrise.send_whisper(user.id, "Usage: !play [song name]\nExample: !play despacito")
+            return
+
+        await self.highrise.chat(f"🔍 {user.username} searching for: {args}")
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                # Search for music
+                async with session.get(f"{self.api_base}/api/search?q={args}") as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get('results'):
+                            # Get the first result
+                            first_result = data['results'][0]
+                            
+                            # Start radio stream
+                            async with session.post(
+                                f"{self.api_base}/api/play",
+                                data={'video_url': first_result['url']}
+                            ) as play_resp:
+                                if play_resp.status == 200:
+                                    result = await play_resp.json()
+                                    radio_url = result.get('radio_url')
+                                    
+                                    await self.highrise.chat(
+                                        f"🎵 NOW PLAYING: {first_result['title']}\n"
+                                        f"🎤 Artist: {first_result.get('uploader', 'Unknown')}\n"
+                                        f"🎧 Requested by: @{user.username}\n"
+                                        f"📻 Radio stream started!"
+                                    )
+                                    
+                                    # Send radio URL via whisper
+                                    if radio_url:
+                                        await self.highrise.send_whisper(
+                                            user.id,
+                                            f"📻 RADIO STREAM URL:\n{radio_url}\n\n"
+                                            f"📍 Add this to Highrise room music settings!\n"
+                                            f"🎵 Music will play automatically!"
+                                        )
+                                else:
+                                    error_text = await play_resp.text()
+                                    print(f"Play API error: {error_text}")
+                                    await self.highrise.chat("❌ Failed to start radio stream")
+                        else:
+                            await self.highrise.chat("❌ No results found for your search")
                     else:
-                        await self.highrise.chat("⏸️ Nothing playing right now. Request a song!")
-                else:
-                    await self.highrise.chat("❌ Could not get current track info")
-        except Exception as e:
-            await self.highrise.chat(f"❌ Error: {str(e)}")
+                        await self.highrise.chat("❌ Search service unavailable")
+                        
+            except Exception as e:
+                print(f"Play error: {e}")
+                await self.highrise.chat("❌ Cannot connect to radio service")
 
-    async def show_queue(self):
-        try:
-            async with self.session.get(f"{self.backend_url}/api/queue") as response:
-                if response.status == 200:
-                    data = await response.json()
+    async def cmd_search(self, user: User, args: str) -> None:
+        """Handle !search [query] - Search for music without playing"""
+        if not args:
+            await self.highrise.send_whisper(user.id, "Usage: !search [song name]\nExample: !search despacito")
+            return
 
-                    current = data.get('current')
-                    queue = data.get('queue', [])
-
-                    queue_text = "📋 MUSIC QUEUE 📋\n\n"
-
-                    if current:
-                        queue_text += f"▶️ NOW: {current['title']}\n\n"
-
-                    if queue:
-                        queue_text += "NEXT UP:\n"
-                        for i, track in enumerate(queue[:5], 1):
-                            queue_text += f"{i}. {track['title']}\n"
-
-                        if len(queue) > 5:
-                            queue_text += f"\n...and {len(queue) - 5} more songs"
+        await self.highrise.chat(f"🔍 {user.username} searching for: {args}")
+        
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(f"{self.api_base}/api/search?q={args}") as resp:
+                    if resp.status == 200:
+                        data = await resp.json()
+                        if data.get('results'):
+                            results = data['results'][:3]  # Show top 3 results
+                            
+                            results_text = "🎵 Search Results:\n"
+                            for i, track in enumerate(results, 1):
+                                results_text += f"{i}. {track['title']} - {track.get('uploader', 'Unknown')}\n"
+                            
+                            results_text += f"\n💡 Use: !play \"{results[0]['title']}\""
+                            
+                            await self.highrise.send_whisper(user.id, results_text)
+                        else:
+                            await self.highrise.send_whisper(user.id, "❌ No results found")
                     else:
-                        queue_text += "Queue is empty! Request songs!"
+                        await self.highrise.send_whisper(user.id, "❌ Search service unavailable")
+                        
+            except Exception as e:
+                print(f"Search error: {e}")
+                await self.highrise.send_whisper(user.id, "❌ Cannot connect to search service")
 
-                    await self.highrise.chat(queue_text)
+    async def cmd_stop(self, user: User, args: str) -> None:
+        """Handle !stop - Stop radio stream"""
+        async with aiohttp.ClientSession() as session:
+            async with session.post(f"{self.api_base}/api/stop") as resp:
+                if resp.status == 200:
+                    await self.highrise.chat(f"⏹️ Radio stopped by @{user.username}")
                 else:
-                    await self.highrise.chat("❌ Could not get queue")
-        except Exception as e:
-            await self.highrise.chat(f"❌ Error: {str(e)}")
+                    await self.highrise.chat("❌ Radio already stopped or service unavailable")
 
-    async def show_stream_url(self):
-        stream_text = f"""
-🎧 LIVE STREAM URL 🎧
+    async def cmd_skip(self, user: User, args: str) -> None:
+        """Handle !skip - Skip current song (alias for stop)"""
+        await self.cmd_stop(user, args)
 
-{self.backend_url}/api/stream
-
-Copy this URL and paste it into:
-• Your web browser
-• Media player (VLC, etc.)
-• Music apps that support streaming
-
-Everyone hears the same song!
-        """
-        await self.highrise.chat(stream_text)
-
-    async def request_song(self, user: User, query: str):
-        try:
-            await self.highrise.chat(f"🔍 Searching for: {query}...")
-
-            async with self.session.post(
-                f"{self.backend_url}/api/request",
-                data={'query': query}
-            ) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    track = data['track']
-                    position = data['position']
-
-                    success_text = f"""
-✅ SONG REQUESTED!
-
-🎵 {track['title']}
-👤 {track['artist']}
-📍 Position #{position} in queue
-
-Requested by: {user.username}
-                    """
-                    await self.highrise.chat(success_text)
+    async def cmd_url(self, user: User, args: str) -> None:
+        """Handle !url - Get radio stream URL"""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{self.api_base}/api/radio/url") as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    radio_url = data.get('radio_url')
+                    status = data.get('status')
+                    
+                    if radio_url:
+                        message = f"📻 RADIO STREAM URL:\n{radio_url}\n\n📍 Add this to Highrise room music settings!"
+                        
+                        if status == "playing":
+                            current_track = data.get('current_track', 'Unknown')
+                            message += f"\n🎵 Currently playing: {current_track}"
+                        else:
+                            message += f"\n💡 Use !play [song] to start music"
+                        
+                        await self.highrise.send_whisper(user.id, message)
+                        await self.highrise.chat(f"📻 @{user.username} check your DMs for the radio URL!")
+                    else:
+                        await self.highrise.send_whisper(user.id, "❌ Could not get radio URL")
                 else:
-                    error_data = await response.json()
-                    await self.highrise.chat(f"❌ {error_data.get('detail', 'Failed to add song')}")
-        except Exception as e:
-            await self.highrise.chat(f"❌ Error requesting song: {str(e)}")
+                    await self.highrise.send_whisper(user.id, "❌ Service unavailable")
 
-    async def skip_song(self):
-        try:
-            async with self.session.post(f"{self.backend_url}/api/skip") as response:
-                if response.status == 200:
-                    data = await response.json()
-                    skipped = data.get('skipped_track', 'Unknown')
-
-                    await self.highrise.chat(f"⏭️ Skipped: {skipped}")
-                    await self.highrise.chat(f"▶️ Playing next song...")
+    async def cmd_now_playing(self, user: User, args: str) -> None:
+        """Handle !np - Show now playing information"""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{self.api_base}/api/status") as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    current_track = data.get('current_track')
+                    status = data.get('status')
+                    
+                    if status == "playing" and current_track:
+                        await self.highrise.chat(
+                            f"🎧 NOW PLAYING:\n"
+                            f"📀 {current_track['title']}\n"
+                            f"🎤 {current_track['artist']}\n"
+                            f"⏱️ {self.format_duration(current_track.get('duration', 0))}"
+                        )
+                    else:
+                        await self.highrise.chat("📻 No music currently playing")
                 else:
-                    error_data = await response.json()
-                    await self.highrise.chat(f"❌ {error_data.get('detail', 'Could not skip')}")
-        except Exception as e:
-            await self.highrise.chat(f"❌ Error: {str(e)}")
+                    await self.highrise.chat("❌ Could not get player status")
 
-    async def pause_playback(self):
-        try:
-            async with self.session.post(f"{self.backend_url}/api/pause") as response:
-                if response.status == 200:
-                    await self.highrise.chat("⏸️ Broadcast paused")
+    async def cmd_status(self, user: User, args: str) -> None:
+        """Handle !status - Show radio status"""
+        async with aiohttp.ClientSession() as session:
+            async with session.get(f"{self.api_base}/api/status") as resp:
+                if resp.status == 200:
+                    data = await resp.json()
+                    status = data.get('status', 'unknown')
+                    stream_active = data.get('stream_active', False)
+                    current_track = data.get('current_track')
+                    
+                    status_emoji = "🟢" if stream_active else "🔴"
+                    status_text = f"{status_emoji} Radio Status: {status.upper()}\n📡 Stream: {'ACTIVE' if stream_active else 'INACTIVE'}"
+                    
+                    if current_track:
+                        status_text += f"\n🎵 Now Playing: {current_track['title']}"
+                    
+                    await self.highrise.chat(status_text)
                 else:
-                    error_data = await response.json()
-                    await self.highrise.chat(f"❌ {error_data.get('detail', 'Could not pause')}")
-        except Exception as e:
-            await self.highrise.chat(f"❌ Error: {str(e)}")
+                    await self.highrise.chat("❌ Service unavailable")
 
-    async def resume_playback(self):
-        try:
-            async with self.session.post(f"{self.backend_url}/api/resume") as response:
-                if response.status == 200:
-                    await self.highrise.chat("▶️ Broadcast resumed!")
-                else:
-                    error_data = await response.json()
-                    await self.highrise.chat(f"❌ {error_data.get('detail', 'Could not resume')}")
-        except Exception as e:
-            await self.highrise.chat(f"❌ Error: {str(e)}")
+    async def cmd_help(self, user: User, args: str) -> None:
+        """Handle !help - Show help menu"""
+        help_text = (
+            "📻 RADIO BOT COMMANDS:\n\n"
+            "🎵 Music Control:\n"
+            "!play [song] - Play music on radio\n"
+            "!stop - Stop current playback\n"
+            "!skip - Skip current song\n"
+            "!search [song] - Search without playing\n\n"
+            "📡 Radio Info:\n"
+            "!url - Get radio stream URL for room\n"
+            "!np - Now playing information\n"
+            "!status - Radio stream status\n"
+            "!help - This help message\n\n"
+            "💡 TIP: Add the radio URL to room settings once, then control with commands!"
+        )
+        
+        await self.highrise.send_whisper(user.id, help_text)
 
+    def format_duration(self, seconds: int) -> str:
+        """Format seconds into MM:SS"""
+        if seconds <= 0:
+            return "Live"
+        minutes = seconds // 60
+        seconds = seconds % 60
+        return f"{minutes}:{seconds:02d}"
 
+    async def roam_continuously(self) -> None:
+        """Make bot roam around the room automatically"""
+        while True:
+            try:
+                next_pos = self.roaming_positions[self.current_roam_index]
+                await self.highrise.walk_to(next_pos)
+                self.current_roam_index = (self.current_roam_index + 1) % len(self.roaming_positions)
+                await asyncio.sleep(45)
+            except Exception as e:
+                print(f"Roaming error: {e}")
+                await asyncio.sleep(10)
+
+# FIXED BOT RUNNER - Use the new Highrise SDK method
 if __name__ == "__main__":
-    from highrise import __main__
-    from highrise.__main__ import BotDefinition
-
-    bot_token = os.getenv("HIGHRISE_API_TOKEN", "YOUR_BOT_TOKEN_HERE")
-    room_id = os.getenv("HIGHRISE_ROOM_ID", "YOUR_ROOM_ID_HERE")
-
-    bot = MusicBot()
-    bot.admins = os.getenv("ADMINS", "Saittam_Virus").split(",") if os.getenv("ADMINS") else []
-
-    bot_definition = BotDefinition(bot, room_id, bot_token)
-
+    import sys
+    
+    # Get environment variables
+    api_token = os.getenv("HIGHRISE_API_TOKEN")
+    room_id = os.getenv("HIGHRISE_ROOM_ID")
+    
+    if not api_token or not room_id:
+        print("❌ Error: Set HIGHRISE_API_TOKEN and HIGHRISE_ROOM_ID environment variables")
+        sys.exit(1)
+    
+    # Create bot definition using the new SDK format
+    bot = AzuraCastBot()
+    
     try:
-        asyncio.run(__main__.main([bot_definition]))
+        # Run the bot using the new SDK method
+        asyncio.run(main([BotDefinition(bot, room_id, api_token)]))
     except KeyboardInterrupt:
         print("\n🛑 Bot stopped by user")
     except Exception as e:
